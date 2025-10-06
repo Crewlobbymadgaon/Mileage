@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Konkan Railway Duty Register</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin:20px; background:#fff; color:#111; }
+      table { border-collapse:collapse; width:100%; }
+      th, td { border:1px solid #ddd; padding:6px; }
+      th { background:#f3f3f3; }
+      input, select, button { padding:6px; margin:4px 2px; }
+      .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+    </style>
+  </head>
+  <body>
+    <h1>Konkan Railway — Running Staff Duty Register</h1>
+
+    <div id="app"></div>
+
+    <script>
+      const app = document.getElementById('app');
+
+      // load entries from localStorage
+      const entries = JSON.parse(localStorage.getItem('kr_duty_register_v1')||'[]');
+      let entry = {};
+
+      function render() {
+        app.innerHTML = `
+        <form id='form' class='grid'>
+          <input name='date' type='date' placeholder='Date' value='${entry.date||''}' />
+          <input name='trainNo' placeholder='Train No' value='${entry.trainNo||''}' />
+          <input name='from' placeholder='From' value='${entry.from||''}' />
+          <input name='to' placeholder='To' value='${entry.to||''}' />
+          <input name='signOn' type='time' value='${entry.signOn||''}' />
+          <input name='signOff' type='time' value='${entry.signOff||''}' />
+          <input name='km' type='number' placeholder='KM' value='${entry.km||''}' />
+          <select name='pr'>
+            <option value=''>--</option>
+            <option value='PR'>PR</option>
+            <option value='CNF'>CNF</option>
+            <option value='WAIT'>WAIT</option>
+            <option value='LEAVE'>LEAVE</option>
+          </select>
+          <input name='remarks' style='grid-column:1/5' placeholder='Remarks' value='${entry.remarks||''}' />
+          <button>Add</button>
+          <button type='button' id='clear'>Clear</button>
+          <button type='button' id='export'>Export CSV</button>
+        </form>
+        <div id='summary'></div>
+        <table id='table'><thead>
+          <tr><th>Date</th><th>Train</th><th>From</th><th>To</th><th>On</th><th>Off</th><th>Duty</th><th>Night</th><th>PR</th><th>KM</th><th>Prog KM</th><th>Prog Duty</th><th>Remarks</th><th>Action</th></tr>
+        </thead><tbody></tbody></table>`;
+        
+        const form = document.getElementById('form');
+        form.onsubmit = e => {
+          e.preventDefault();
+          const f = new FormData(form);
+          const obj = Object.fromEntries(f.entries());
+          const s = parseTime(obj.date,obj.signOn);
+          const o = parseTime(obj.date,obj.signOff);
+          let effOff = o && s && o <= s ? new Date(o.getTime()+86400000):o;
+          const duty = s&&effOff?((effOff-s)/3600000):0;
+          const night = s&&effOff?calcNightHours(s,effOff):0;
+          entries.push({...obj, id:Date.now(), km:+obj.km||0, dutyHours:duty.toFixed(2), nightHours:night.toFixed(2)});
+          localStorage.setItem('kr_duty_register_v1',JSON.stringify(entries));
+          render();
+        };
+        document.getElementById('clear').onclick=()=>{entry={};render()};
+        document.getElementById('export').onclick=()=>exportCSV(entries);
+        updateTable();
+      }
+
+      function updateTable(){
+        const tbody = document.querySelector('#table tbody');
+        tbody.innerHTML='';
+        let progKm=0, progDuty=0, totalKm=0,totalDuty=0,totalNight=0;
+        entries.sort((a,b)=>a.date.localeCompare(b.date));
+        for(const r of entries){
+          progKm += +r.km||0; progDuty += +r.dutyHours||0;
+          totalKm += +r.km||0; totalDuty += +r.dutyHours||0; totalNight += +r.nightHours||0;
+          const tr=document.createElement('tr');
+          tr.innerHTML=`<td>${r.date}</td><td>${r.trainNo}</td><td>${r.from}</td><td>${r.to}</td>
+          <td>${r.signOn}</td><td>${r.signOff}</td><td>${r.dutyHours}</td><td>${r.nightHours}</td>
+          <td>${r.pr}</td><td>${r.km}</td><td>${progKm}</td><td>${progDuty.toFixed(2)}</td><td>${r.remarks||''}</td>
+          <td><button data-id='${r.id}'>Del</button></td>`;
+          tbody.appendChild(tr);
+        }
+        document.querySelectorAll('button[data-id]').forEach(btn=>{
+          btn.onclick=()=>{
+            const id=+btn.dataset.id;
+            const idx=entries.findIndex(r=>r.id===id);
+            if(idx>-1) entries.splice(idx,1);
+            localStorage.setItem('kr_duty_register_v1',JSON.stringify(entries));
+            render();
+          };
+        });
+        document.getElementById('summary').innerHTML=`<p><b>Total KM:</b> ${totalKm.toFixed(2)} | <b>Duty Hours:</b> ${totalDuty.toFixed(2)} | <b>Night Hours:</b> ${totalNight.toFixed(2)}</p>`;
+      }
+
+      function parseTime(d,t){
+        if(!d||!t)return null;
+        const [y,m,da]=d.split('-').map(Number);const [h,mi]=t.split(':').map(Number);
+        return new Date(y,m-1,da,h||0,mi||0,0);
+      }
+
+      function calcNightHours(s,e){
+        if(!s||!e)return 0;
+        if(e<=s)e=new Date(e.getTime()+86400000);
+        const nightStart=22,nightEnd=6;
+        let total=0,temp=new Date(s);
+        while(temp<e){
+          const start=new Date(temp);start.setHours(nightStart,0,0,0);
+          const end=new Date(start);end.setDate(end.getDate()+1);end.setHours(nightEnd,0,0,0);
+          const os=s>start?s:start;const oe=e<end?e:end;
+          if(oe>os)total+=(oe-os)/3600000;
+          temp.setDate(temp.getDate()+1);
+        }
+        return total.toFixed(2);
+      }
+
+      function exportCSV(list){
+        const header=['Date','Train No','From','To','Sign On','Sign Off','Duty Hours','Night Hours','PR','KM','Remarks'];
+        const rows=list.map(r=>[r.date,r.trainNo,r.from,r.to,r.signOn,r.signOff,r.dutyHours,r.nightHours,r.pr,r.km,r.remarks]);
+        const csv=[header,...rows].map(r=>r.join(',')).join('\\n');
+        const blob=new Blob([csv],{type:'text/csv'});
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(blob);
+        a.download='duty_data.csv';
+        a.click();
+      }
+
+      render();
+    </script>
+  </body>
+</html>
